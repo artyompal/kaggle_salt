@@ -35,7 +35,7 @@ def random_crop(imgs):
     imgs = [x[new_y:new_y+new_h,new_x:new_x+new_w, :] for x in imgs]
     # scale the images back to their original size
     #imgs = [resize(x, (101,101), preserve_range=True, mode='reflect') for x in imgs]
-    return imgs
+    return imgs 
 
 def shear(img, shear_amt):
     shear = tf.AffineTransform(shear=shear_amt)
@@ -64,7 +64,7 @@ def mt_noise(img):
 
 def zoom(img, zoom_amt, imsize):
     h,w,_ = img.shape
-
+        
     # Bounding box of the zoomed-in region within the input array
     zh = int(np.round(h / zoom_factor))
     zw = int(np.round(w / zoom_factor))
@@ -73,7 +73,7 @@ def zoom(img, zoom_amt, imsize):
 
     out = img[top:top+zh, left:left+zw]
 
-    return out
+    return out 
 
 def augment_img(imgs, imsize, mt=False):
     '''randomly horizontal flip'''
@@ -83,10 +83,10 @@ def augment_img(imgs, imsize, mt=False):
     # remove small masks
     if imgs[1].sum() < 150:
         imgs[1] = np.zeros((imgs[1].shape))
-
+    
     if random.random() > 0.5:
         # flip lr
-        imgs = [np.fliplr(x) for x in imgs]
+        imgs = [np.fliplr(x) for x in imgs]    
 
     #if np.random.rand() > 0.5:
         # flip ud
@@ -96,12 +96,12 @@ def augment_img(imgs, imsize, mt=False):
         # random 90 degree rotation
     #    num_rot = np.random.randint(0,3)
     #    imgs = [np.rot90(x, k=num_rot) for x in imgs]
-
+    
     if random.random() > 0.5:
         # random shear
         shear_amt = random.uniform(-0.1, 0.1)
         imgs = [shear(x, shear_amt) for x in imgs]
-
+   
     if random.random() > 0.5:
         # random rotation
         rot_amt = random.uniform(-0.17, 0.17)
@@ -131,8 +131,7 @@ def augment_img(imgs, imsize, mt=False):
     #print(imgs[0].shape)
     # reflect pad the images to 128x128
     if imgs[0].shape != (101,101,3):
-        imgs = [resize(x, (101,101), anti_aliasing=True, preserve_range=True,
-                       mode='reflect') for x in imgs]
+        imgs = [resize(x, (101,101), preserve_range=True, mode='reflect') for x in imgs]
     imgs = [reflect_pad(x, int((imsize-x.shape[0]) / 2)) for x in imgs]
     #else:
     #    imgs = [resize(x, (imsize,imsize), preserve_range=True, mode='reflect') for x in imgs]
@@ -143,6 +142,6 @@ def augment_img(imgs, imsize, mt=False):
     #print()
     #print()
 
-    # transpose for pytorch
+    # transpose for pytorch 
     imgs = [x.transpose((2,0,1)) for x in imgs]
     return imgs

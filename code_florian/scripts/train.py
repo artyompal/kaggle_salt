@@ -5,8 +5,6 @@ import argparse
 import os
 
 import numpy as np
-import pandas as pd
-
 
 import torch
 import torch.nn as nn
@@ -33,8 +31,6 @@ parser.add_argument('--num_folds', default=5, type=int,
                     help='number of cross val folds')
 parser.add_argument('--start_fold', default=0, type=int,
                     help='first fold to try')
-parser.add_argument('--stop_fold', default=5, type=int,
-                    help='fold to stop')
 parser.add_argument('--epochs', default=1000, type=int,
                     help='number of epochs')
 parser.add_argument('--lr_max', default=0.01, type=float,
@@ -73,7 +69,7 @@ parser.add_argument('--use_lovasz', action='store_true',
                     help='whether to use focal loss during finetuning')
 parser.add_argument('--swa', action='store_true',
                     help='whether to use stochastic weight averaging')
-parser.add_argument('--mosaic', default=2, type=int,
+parser.add_argument('--mosaic', default=0, type=int,
                     help='how to use mosaic: 0-disabled, 1-channel 1, 2 - channel 2')
 args = parser.parse_args()
 
@@ -334,6 +330,8 @@ def train_network(net, model_name, fold=0, model_ckpt=None):
     torch.save(net.state_dict(), '../model_weights/swa_{}_{}_fold-{}.pth'.format(model_name,
                                                                                  args.exp_name, fold))
 
+    import pandas as pd
+
     out_dict = {'train_losses': train_losses,
                 'valid_losses': valid_losses,
                 'valid_ious': valid_ious}
@@ -349,7 +347,12 @@ def train_folds():
     if args.mosaic:
         model_name += "_mos%d" % args.mosaic
 
-    for fold in range(args.start_fold, args.stop_fold):
+    for fold in range(args.start_fold, args.num_folds):
+
+        #if fold > 0:
+        #    break
+
+        # set model filenames
         model_params = [model_name, args.exp_name, fold]
         MODEL_CKPT = '../model_weights/best_{}_{}_fold-{}.pth'.format(*model_params)
 

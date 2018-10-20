@@ -26,6 +26,7 @@ from torch.utils.data.sampler import SubsetRandomSampler
 
 from utils.transforms import augment_img, reflect_pad, mt_noise
 
+#cv2.setNumThreads(0)
 
 def add_depth_channels(image_tensor, mosaic_mode):
     _, h, w = image_tensor.size()
@@ -40,55 +41,10 @@ def add_depth_channels(image_tensor, mosaic_mode):
 
     return image_tensor
 
-def rle_decode(mask_rle, shape=(101, 101)):
-    ''' Args:
-    mask_rle: run-length as string formated (start length)
-    shape: (height,width) of array to return
-    Returns numpy array, 1 - mask, 0 - background '''
-    img = np.zeros(shape[0]*shape[1], dtype=np.uint8)
-    if str(mask_rle) != str(np.nan):
-        s = mask_rle.split()
-        starts, lengths = [np.asarray(x, dtype=int) for x in (s[0:][::2], s[1:][::2])]
-        starts -= 1
-        ends = starts + lengths
-
-        for lo, hi in zip(starts, ends):
-            img[lo:hi] = 1
-    return img.reshape(shape).T  # Needed to align to RLE direction
-
-def load_pseudo_labels():
-    df = pd.read_csv("../data/pseudo_labels.csv")
-    indices = df.id.values
-    imgs = np.array([rle_decode(predict) for predict in df.rle_mask.values])
-    print("load_pseudo_labels", indices.shape, imgs.shape)
-    assert(indices.shape[0] == imgs.shape[0])
-    return indices, imgs
-
-def parse_mosaic(pseudo_labels):
-    """ Reads adjacency information. Returns dicts: [left, top, right, bottom].
-    Each of them has downsampled 50x50 images associated with every id. """
-    print("loading mosaic")
+def parse_mosaic():
+    ''' reads adjacency information. Returns dicts: [left, top, right, bottom] '''
     left, top, right, bottom = dict(), dict(), dict(), dict()
-    pseudo_ids, pseudo_imgs = pseudo_labels
-
-    pseudo_masks = {id: resize(img, (50, 50), anti_aliasing=True, mode='constant' )
-                    for (id, img) in zip(pseudo_ids, pseudo_imgs)}
-
-    def load_pic(name: str) -> Any:
-        # print("loading image", name)
-        path = "../data/train/masks/" + name + ".png"
-        # print("testing path", path)
-
-        if os.path.exists(path):
-            neigh = img_as_float(imread(path))
-            # print("neighbour found in train")
-            return resize(neigh, (50, 50), anti_aliasing=True, mode='constant')[:, :]
-        elif name in pseudo_masks:
-            # print("neighbour found in pseudo-labels")
-            return pseudo_masks[name]
-        else:
-            # print("neighbour not found")
-            return np.ones((50, 50), dtype=float) / 2
+    print("loading mosaic")
 
     for slice in tqdm(glob.glob("../data/mos_numpy/*.csv")):
         mosaic = pd.read_csv(slice, header=None).values
@@ -100,20 +56,20 @@ def parse_mosaic(pseudo_labels):
                 return type(val) == str
 
             if x > 0 and non_empty(mosaic[x - 1, y]):
-                left[img] = load_pic(mosaic[x - 1, y])
+                left[img] = mosaic[x - 1, y]
 
             if y > 0 and non_empty(mosaic[x, y - 1]):
-                top[img] = load_pic(mosaic[x, y - 1])
+                top[img] = mosaic[x, y - 1]
 
             if x < mosaic.shape[0] - 1 and non_empty(mosaic[x + 1, y]):
-                right[img] = load_pic(mosaic[x + 1, y])
+                right[img] = mosaic[x + 1, y]
 
             if y < mosaic.shape[1] - 1 and non_empty(mosaic[x, y + 1]):
-                bottom[img] = load_pic(mosaic[x, y + 1])
+                bottom[img] = mosaic[x, y + 1]
 
     return [left, top, right, bottom]
 
-def add_neighbours(pseudo_ids, pseudo_imgs, mosaic_mode, mosaic, img, id):
+def add_neighbours(mosaic_mode, mosaic, img, id):
     """ Takes a batch (N, 101, 101, 3) and list of id's. Adds mosaic data."""
     if mosaic_mode not in [1, 2]:
         return img
@@ -126,8 +82,16 @@ def add_neighbours(pseudo_ids, pseudo_imgs, mosaic_mode, mosaic, img, id):
 
     for neighbour in range(4):
         if name in mosaic[neighbour]:
-            ofs = mask_offsets[neighbour]
-            img[ofs[0] : ofs[0]+50, ofs[1] : ofs[1]+50, mosaic_mode] = mosaic[neighbour][name]
+            path = "../data/train/masks/" + mosaic[neighbour][name] + ".png"
+
+            if os.path.exists(path):
+                neigh = img_as_float(imread(path))
+                # print("found neighbour", mask_names[neighbour], neigh.shape)
+                neigh = resize(img, (50, 50))[:, :, 0]
+
+                ofs = mask_offsets[neighbour]
+                print(neigh.shape)
+                img[ofs[0] : ofs[0]+50, ofs[1] : ofs[1]+50, mosaic_mode] = neigh
 
     return img
 
@@ -146,8 +110,7 @@ def edges(mask, threshold=0.5):
 
 class MaskDataset(data.Dataset):
     '''Generic dataloader for a pascal VOC format folder'''
-    def __init__(self, pseudo_labels, mosaic, mosaic_mode,
-                 imsize=128, img_ids=None, img_paths=None,
+    def __init__(self, mosaic, mosaic_mode, imsize=128, img_ids=None, img_paths=None,
                  mask_paths=None, valid=False, small_msk_ids=None):
         self.valid = valid
         self.imsize = imsize
@@ -157,38 +120,18 @@ class MaskDataset(data.Dataset):
         self.small_msk_ids = small_msk_ids
         self.mosaic = mosaic
         self.mosaic_mode = mosaic_mode
-        self.pseudo_ids = pseudo_labels[0]
-        self.pseudo_imgs = pseudo_labels[1]
-        self.num_train_imgs = int(len(self.img_ids) * (0.2 if self.valid else 0.8))
-        self.num_pseudo_imgs = 0 if self.valid else self.pseudo_ids.size
         self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                               std=[0.229, 0.224, 0.225])
 
     def __getitem__(self, index):
-        if index < self.num_train_imgs:
-            img = img_as_float(imread(self.img_paths + self.img_ids[index]))[:,:,:3]
-            msk = imread(self.mask_paths + self.img_ids[index]).astype(np.bool)
+        # super sample small masks
+        #if random.random() > 0.25 or self.valid:
+        img = img_as_float(imread(self.img_paths + self.img_ids[index]))[:,:,:3]
+        img = add_neighbours(self.mosaic_mode, self.mosaic, img, self.img_ids[index])
+        #img[:,:,2] = 1. - fltrs.laplace(img[:,:,1])
 
-            img = add_neighbours(self.pseudo_ids, self.pseudo_imgs, self.mosaic_mode,
-                                 self.mosaic, img, self.img_ids[index])
-        else:
-            index2 = index - self.num_train_imgs
-            img = img_as_float(imread("../data/test/images/" + self.pseudo_ids[index2]
-                                      + ".png"))[:,:,:3]
-            msk = self.pseudo_imgs[index2].astype(bool)
-
-            img = add_neighbours(self.pseudo_ids, self.pseudo_imgs, self.mosaic_mode,
-                                 self.mosaic, img, self.pseudo_ids[index2] + ".png")
-
-        # from scipy.stats import describe
-        # print("=====================")
-        # print(describe(img.flatten()))
-        # print(img)
-        # print(describe(msk.flatten()))
-        # print(msk)
-
+        msk = imread(self.mask_paths + self.img_ids[index]).astype(np.bool)
         msk = np.expand_dims(msk, axis=-1)
-
         edgs = edges(msk)
         #else:
         #    small_idx = random.randint(0, len(self.small_msk_ids))
@@ -200,6 +143,10 @@ class MaskDataset(data.Dataset):
             img_np, msk_np, edg_np  = augment_img([img, msk, edgs], imsize=self.imsize)
             img_lr = np.fliplr(img_np)
         else:
+            #img_np = resize(np.asarray(img), (self.imsize, self.imsize),
+            #            preserve_range=True, mode='reflect')
+            #msk_np = resize(msk, (self.imsize, self.imsize),
+            #                preserve_range=True, mode='reflect')
             img_np = reflect_pad(img, int((self.imsize - img.shape[0]) / 2))
             img_lr = np.fliplr(img_np)
             msk_np = reflect_pad(msk, int((self.imsize - msk.shape[0]) / 2))
@@ -218,27 +165,23 @@ class MaskDataset(data.Dataset):
         img_lr_tch = self.normalize(torch.from_numpy(img_lr.astype(np.float32)))
         img_lr_tch = add_depth_channels(img_lr_tch, self.mosaic_mode)
 
-        if index < self.num_train_imgs:
-            file_size = os.stat('../data/train/images/' + self.img_ids[index]).st_size
-            image_id = self.img_ids[index].replace('.png', '')
-        else:
-            file_size = -1
-            image_id = self.pseudo_ids[index - self.num_train_imgs]
-
         out_dict = {'img': img_tch,
                     'msk': msk_tch,
                     'edges': edg_tch,
                     'has_msk': msk_tch.sum() > 0,
 
                     'img_lr': img_lr_tch,
-                    'blank': torch.tensor(file_size != 107),
+                    'blank': torch.tensor(os.stat('../data/train/images/' + self.img_ids[index]).st_size != 107),
 
-                    'id': image_id}
+                    'id': self.img_ids[index].replace('.png', '')}
 
         return out_dict
 
     def __len__(self):
-        return self.num_train_imgs + self.num_pseudo_imgs
+        if self.valid:
+            return int(len(self.img_ids) * 0.2)
+        else:
+            return int(len(self.img_ids) * 0.8)
 
 
 class MaskDataset_MT(data.Dataset):
@@ -298,20 +241,18 @@ class MaskDataset_MT(data.Dataset):
 
 class MaskTestDataset(data.Dataset):
     '''Dataset for loading the test Images'''
-    def __init__(self, pseudo_labels, mosaic, mosaic_mode, imsize=128, img_ids=None, img_paths=None):
+    def __init__(self, mosaic, mosaic_mode, imsize=128, img_ids=None, img_paths=None):
         self.imsize = imsize
         self.img_ids = img_ids
         self.img_paths = img_paths
         self.mosaic = mosaic
         self.mosaic_mode = mosaic_mode
-        self.pseudo_ids = pseudo_labels[0]
-        self.pseudo_imgs = pseudo_labels[1]
         self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                               std=[0.229, 0.224, 0.225])
 
     def __getitem__(self, index):
         img = img_as_float(imread('../data/test/images/' + self.img_ids[index]))[:,:,:3]
-        img = add_neighbours(self.pseudo_ids, self.pseudo_imgs, self.mosaic_mode, self.mosaic, img, self.img_ids[index])
+        img = add_neighbours(self.mosaic_mode, self.mosaic, img, self.img_ids[index])
 
         # scale up image to 202 or keep at 101, reflect pad to get network sizes
         if self.imsize == 256:
@@ -344,8 +285,7 @@ class MaskTestDataset(data.Dataset):
 
 def get_data_loaders(imsize=128, batch_size=16, num_folds=5, fold=0, mosaic_mode=0, num_workers=8):
     '''sets up the torch data loaders for training'''
-    pseudo_labels = load_pseudo_labels()
-    mosaic = parse_mosaic(pseudo_labels)
+    mosaic = parse_mosaic()
 
     with open("../data/fixed_files.pkl", "rb") as f:
         img_ids = pickle.load(f)
@@ -362,16 +302,16 @@ def get_data_loaders(imsize=128, batch_size=16, num_folds=5, fold=0, mosaic_mode
 
     print('Supersampling {} small masks'.format(len(small_msk_ids)))
 
-    # train_sampler = SubsetRandomSampler(train_idx)
-    # valid_sampler = SubsetRandomSampler(valid_idx)
+    train_sampler = SubsetRandomSampler(train_idx)
+    valid_sampler = SubsetRandomSampler(valid_idx)
 
     # set up the datasets
-    train_dataset = MaskDataset(pseudo_labels, mosaic, mosaic_mode,
+    train_dataset = MaskDataset(mosaic, mosaic_mode,
                                 imsize=imsize, img_ids=img_ids,
                                 img_paths='../data/train/images/',
                                 mask_paths='../data/train/masks/',
                                 small_msk_ids=small_msk_ids)
-    valid_dataset = MaskDataset(pseudo_labels, mosaic, mosaic_mode,
+    valid_dataset = MaskDataset(mosaic, mosaic_mode,
                                 imsize=imsize, img_ids=img_ids,
                                 img_paths='../data/train/images/',
                                 mask_paths='../data/train/masks/',
@@ -380,15 +320,15 @@ def get_data_loaders(imsize=128, batch_size=16, num_folds=5, fold=0, mosaic_mode
     # set up the data loaders
     train_loader = data.DataLoader(train_dataset,
                                        batch_size=batch_size,
-                                       shuffle=True,
-                                       # sampler=train_sampler,
+                                       shuffle=False,
+                                       sampler=train_sampler,
                                        num_workers=num_workers,
                                        pin_memory=True)
 
     valid_loader = data.DataLoader(valid_dataset,
                                        batch_size=batch_size,
-                                       shuffle=True,
-                                       # sampler=valid_sampler,
+                                       shuffle=False,
+                                       sampler=valid_sampler,
                                        num_workers=num_workers,
                                        pin_memory=True)
 
@@ -445,14 +385,13 @@ def get_data_mt_loaders(imsize=128, batch_size=16, num_folds=5, fold=0, unlabele
 
 def get_test_loader(imsize=128, batch_size=16, mosaic_mode=0):
     '''sets up the torch data loaders for training'''
-    pseudo_labels = load_pseudo_labels()
-    mosaic = parse_mosaic(pseudo_labels)
+    mosaic = parse_mosaic()
 
     img_ids = [os.path.basename(x) for x in glob.glob('../data/test/images/*.png')]
     print('Found {} test images'.format(len(img_ids)))
 
     # set up the datasets
-    test_dataset = MaskTestDataset(pseudo_labels, mosaic, mosaic_mode,
+    test_dataset = MaskTestDataset(mosaic, mosaic_mode,
                                    imsize=imsize, img_ids=img_ids,
                                    img_paths='../data/test/images/')
 
