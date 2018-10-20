@@ -1,0 +1,7 @@
+output
+predicts
+results
+submissions
+__pycache__/
+*.ipynb_checkpoints
+models
