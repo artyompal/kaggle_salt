@@ -72,8 +72,6 @@ parser.add_argument('--save_raw', action='store_true',
                     help='whether to export predicts without thresholds')
 parser.add_argument('--mosaic', default=0, type=int,
                     help='how to use mosaic: 0-disabled, 1-channel 1, 2 - channel 2')
-parser.add_argument('--score_only', action='store_true',
-                    help='don\'t generate predictions')
 
 
 def predict(net: Any, test_loader: Any, fold_num: int, to_csv: bool, threshold: float) -> Any:
@@ -92,13 +90,13 @@ def predict(net: Any, test_loader: Any, fold_num: int, to_csv: bool, threshold: 
             blanks = data['blank']
 
             # get predictions
-            preds, chck_preds, edges_preds = net(test_imgs)
+            preds, chck_preds = net(test_imgs)
             preds = preds.sigmoid()
             chck_preds = chck_preds.sigmoid() > 0.5
 
             if args.flip_tta:
                 test_imgs_lr = data['img_lr'].to(device)
-                preds_lr, check_lr, edges_preds_lr = net(test_imgs_lr)
+                preds_lr, check_lr = net(test_imgs_lr)
                 preds_lr_ = preds_lr.sigmoid()
                 check_lr = check_lr.sigmoid() > 0.5
 
@@ -294,9 +292,6 @@ def make_preds():
     best_iou = ious[threshold_best_index]
     best_threshold = thresholds[threshold_best_index]
     print("validation:", best_iou, "best threshold", best_threshold)
-
-    if args.score_only:
-        return
 
     # write predicts for the train set
     directory, name_ext = os.path.split(MODEL_CKPT)

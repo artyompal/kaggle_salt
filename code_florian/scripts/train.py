@@ -5,8 +5,6 @@ import argparse
 import os
 
 import numpy as np
-import pandas as pd
-
 
 import torch
 import torch.nn as nn
@@ -105,7 +103,6 @@ def train(net, optimizer, train_loader, freeze_bn=False, use_lovasz=False, swa=F
     for i, data in enumerate(train_loader):
         imgs = data['img'].to(device)
         msks = data['msk'].to(device)
-        edges = data['edges'].to(device)
         msk_bool = data['has_msk'].float().to(device)
 
         if args.debug and i == 0:
@@ -116,7 +113,7 @@ def train(net, optimizer, train_loader, freeze_bn=False, use_lovasz=False, swa=F
             vsn.utils.save_image(msk_grid, '../imgs/train_msks.png')
 
         # get predictions
-        msk_preds, bool_preds, msk_edges = net(imgs)
+        msk_preds, bool_preds = net(imgs)
         msk_blend = msk_preds * bool_preds.view(imgs.size(0), 1, 1, 1)
 
         # calculate loss
@@ -126,8 +123,6 @@ def train(net, optimizer, train_loader, freeze_bn=False, use_lovasz=False, swa=F
             loss = focal_loss(msk_preds, msks)
             loss += L.lovasz_hinge(msk_preds, msks)
         loss += args.lambda_bool * bce(bool_preds, msk_bool.view(-1,1))
-        edges_loss = bce(msk_edges, edges)
-        loss = loss * 0.1 + edges_loss
 
         # zero gradients from previous run
         optimizer.zero_grad()
@@ -160,10 +155,9 @@ def valid(net, optimizer, valid_loader, use_lovasz=False, save_imgs=False, fold_
         for i, data in enumerate(valid_loader):
             valid_imgs = data['img'].to(device)
             valid_msks = data['msk'].to(device)
-            valid_edges = data['edges'].to(device)
             valid_msk_bool = data['has_msk'].float().to(device)
             # get predictions
-            msk_vpreds, bool_vpreds, edges_preds = net(valid_imgs)
+            msk_vpreds, bool_vpreds = net(valid_imgs)
             msk_blend_vpreds = msk_vpreds * bool_vpreds.view(valid_imgs.size(0), 1, 1, 1)
 
             if save_imgs:
@@ -184,8 +178,7 @@ def valid(net, optimizer, valid_loader, use_lovasz=False, save_imgs=False, fold_
                 #vloss -= dice(msk_vpreds.sigmoid(), valid_msks)
 
             vloss += args.lambda_bool * bce(bool_vpreds, valid_msk_bool.view(-1,1))
-            edges_vloss = bce(edges_preds, valid_edges)
-            vloss = edges_vloss + vloss * 0.1
+            vloss += args.lambda_bool * focal_loss(msk_blend_vpreds, valid_msks)
 
             #vloss += args.lambda_dice * dice(msk_vpreds.sigmoid(), valid_msks)
             # get validation stats
@@ -208,8 +201,7 @@ def train_network(net, model_name, fold=0, model_ckpt=None):
                                                       batch_size=args.batch_size,
                                                       num_folds=args.num_folds,
                                                       mosaic_mode=args.mosaic,
-                                                      fold=fold,
-                                                      num_workers=16)
+                                                      fold=fold)
 
         # training flags
         swa = False
@@ -334,6 +326,8 @@ def train_network(net, model_name, fold=0, model_ckpt=None):
     torch.save(net.state_dict(), '../model_weights/swa_{}_{}_fold-{}.pth'.format(model_name,
                                                                                  args.exp_name, fold))
 
+    import pandas as pd
+
     out_dict = {'train_losses': train_losses,
                 'valid_losses': valid_losses,
                 'valid_ious': valid_ious}
@@ -353,7 +347,7 @@ def train_folds():
         model_params = [model_name, args.exp_name, fold]
         MODEL_CKPT = '../model_weights/best_{}_{}_fold-{}.pth'.format(*model_params)
 
-        net = ResUNet(3, use_bool=True)
+        net = ResUNet(use_bool=True)
 
         if os.path.exists(MODEL_CKPT):
             state_dict = torch.load(MODEL_CKPT)
