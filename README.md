@@ -1,5 +1,5 @@
 # Kaggle TGS Salt Identification Challenge
-This is our solution. It's based on the (unintentionally) open-sourced code by Florian Muellerklein: https://github.com/FlorianMuellerklein/kaggle_tgs_salt However, we tuned it and prepared several ensembles with our solutions using bagging and stacking.
+This is our solution. It's based on the code open-source by Florian Muellerklein: https://github.com/FlorianMuellerklein/kaggle_tgs_salt. However, we tuned it and prepared several ensembles with our solutions using bagging and stacking.
 
 Features:
 * SE-ResNext;
